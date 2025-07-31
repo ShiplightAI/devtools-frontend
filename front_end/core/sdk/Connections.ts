@@ -86,30 +86,37 @@ export class MainConnection implements ProtocolClient.InspectorBackend.Connectio
 }
 
 export class WebSocketConnection implements ProtocolClient.InspectorBackend.Connection {
-  #socket: WebSocket|null;
+  #socket: WebSocket|null = null;
   onMessage: ((arg0: (Object|string)) => void)|null;
   #onDisconnect: ((arg0: string) => void)|null;
   #onWebSocketDisconnect: ((message: Platform.UIString.LocalizedString) => void)|null;
   #connected: boolean;
   #messages: string[];
+  #url: Platform.DevToolsPath.UrlString;
+  #reconnectAttempts: number;
+  #maxReconnectAttempts: number;
+  #baseReconnectDelay: number;
+  #reconnectTimer: number|null;
+  #shouldReconnect: boolean;
+  #isManualDisconnect: boolean;
   constructor(
       url: Platform.DevToolsPath.UrlString,
       onWebSocketDisconnect: (message: Platform.UIString.LocalizedString) => void) {
-    this.#socket = new WebSocket(url);
-    this.#socket.onerror = this.onError.bind(this);
-    this.#socket.onopen = this.onOpen.bind(this);
-    this.#socket.onmessage = (messageEvent: MessageEvent<string>): void => {
-      if (this.onMessage) {
-        this.onMessage.call(null, messageEvent.data);
-      }
-    };
-    this.#socket.onclose = this.onClose.bind(this);
+    this.#url = url;
+    this.#reconnectAttempts = 0;
+    this.#maxReconnectAttempts = 5;
+    this.#baseReconnectDelay = 1000;
+    this.#reconnectTimer = null;
+    this.#shouldReconnect = true;
+    this.#isManualDisconnect = false;
 
     this.onMessage = null;
     this.#onDisconnect = null;
     this.#onWebSocketDisconnect = onWebSocketDisconnect;
     this.#connected = false;
     this.#messages = [];
+
+    this.#createSocket();
   }
 
   setOnMessage(onMessage: (arg0: (Object|string)) => void): void {
@@ -120,19 +127,69 @@ export class WebSocketConnection implements ProtocolClient.InspectorBackend.Conn
     this.#onDisconnect = onDisconnect;
   }
 
+  #createSocket(): void {
+    this.#socket = new WebSocket(this.#url);
+    this.#socket.onerror = this.onError.bind(this);
+    this.#socket.onopen = this.onOpen.bind(this);
+    this.#socket.onmessage = (messageEvent: MessageEvent<string>): void => {
+      if (this.onMessage) {
+        this.onMessage.call(null, messageEvent.data);
+      }
+    };
+    this.#socket.onclose = this.onClose.bind(this);
+  }
+
+  #scheduleReconnect(): void {
+    if (!this.#shouldReconnect || this.#isManualDisconnect || this.#reconnectAttempts >= this.#maxReconnectAttempts) {
+      return;
+    }
+
+    const delay = Math.min(this.#baseReconnectDelay * Math.pow(2, this.#reconnectAttempts), 30000);
+    console.log(`WebSocket reconnection scheduled in ${delay}ms (attempt ${this.#reconnectAttempts + 1}/${this.#maxReconnectAttempts})`);
+
+    this.#reconnectTimer = window.setTimeout(() => {
+      this.#attemptReconnect();
+    }, delay);
+  }
+
+  #attemptReconnect(): void {
+    if (!this.#shouldReconnect || this.#isManualDisconnect) {
+      return;
+    }
+
+    this.#reconnectAttempts++;
+    console.log(`Attempting WebSocket reconnection (${this.#reconnectAttempts}/${this.#maxReconnectAttempts})`);
+
+    this.#clearReconnectTimer();
+    this.#createSocket();
+  }
+
+  #clearReconnectTimer(): void {
+    if (this.#reconnectTimer !== null) {
+      window.clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = null;
+    }
+  }
+
   private onError(): void {
-    if (this.#onWebSocketDisconnect) {
+    // Only show the disconnect UI if we won't be attempting reconnection
+    if (this.#onWebSocketDisconnect && this.#reconnectAttempts >= this.#maxReconnectAttempts) {
       this.#onWebSocketDisconnect.call(null, i18nString(UIStrings.websocketDisconnected));
     }
-    if (this.#onDisconnect) {
-      // This is called if error occurred while connecting.
+    if (this.#onDisconnect && this.#reconnectAttempts >= this.#maxReconnectAttempts) {
+      // Only call onDisconnect if we've exhausted all reconnection attempts
       this.#onDisconnect.call(null, 'connection failed');
     }
     this.close();
+    this.#scheduleReconnect();
   }
 
   private onOpen(): void {
     this.#connected = true;
+    const wasReconnecting = this.#reconnectAttempts > 0;
+    this.#reconnectAttempts = 0;
+    this.#clearReconnectTimer();
+
     if (this.#socket) {
       this.#socket.onerror = console.error;
       for (const message of this.#messages) {
@@ -140,16 +197,25 @@ export class WebSocketConnection implements ProtocolClient.InspectorBackend.Conn
       }
     }
     this.#messages = [];
+
+    if (wasReconnecting) {
+      console.log('WebSocket reconnection successful');
+    }
   }
 
   private onClose(): void {
-    if (this.#onWebSocketDisconnect) {
+    // Only show the disconnect UI if this was manual or we won't be attempting reconnection
+    if (this.#onWebSocketDisconnect && (this.#isManualDisconnect || this.#reconnectAttempts >= this.#maxReconnectAttempts)) {
       this.#onWebSocketDisconnect.call(null, i18nString(UIStrings.websocketDisconnected));
     }
-    if (this.#onDisconnect) {
+    if (this.#onDisconnect && (this.#isManualDisconnect || this.#reconnectAttempts >= this.#maxReconnectAttempts)) {
+      // Only call onDisconnect if this was manual or we've exhausted all reconnection attempts
       this.#onDisconnect.call(null, 'websocket closed');
     }
     this.close();
+    if (!this.#isManualDisconnect) {
+      this.#scheduleReconnect();
+    }
   }
 
   private close(callback?: (() => void)): void {
@@ -173,6 +239,10 @@ export class WebSocketConnection implements ProtocolClient.InspectorBackend.Conn
   }
 
   disconnect(): Promise<void> {
+    this.#isManualDisconnect = true;
+    this.#shouldReconnect = false;
+    this.#clearReconnectTimer();
+
     return new Promise(fulfill => {
       this.close(() => {
         if (this.#onDisconnect) {
