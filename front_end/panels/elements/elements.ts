@@ -29,9 +29,11 @@ import './ElementStatePaneWidget.js';
 import './ElementsTreeElementHighlighter.js';
 import './AccessibilityTreeUtils.js';
 import './AccessibilityTreeView.js';
+import './PlaywrightLocatorView.js';
 
 import * as AccessibilityTreeUtils from './AccessibilityTreeUtils.js';
 import * as AccessibilityTreeView from './AccessibilityTreeView.js';
+import * as PlaywrightLocatorView from './PlaywrightLocatorView.js';
 import * as ClassesPaneWidget from './ClassesPaneWidget.js';
 import * as ColorSwatchPopoverIcon from './ColorSwatchPopoverIcon.js';
 import * as ComputedStyleModel from './ComputedStyleModel.js';
@@ -92,6 +94,7 @@ export {
   MetricsSidebarPane,
   NodeStackTraceWidget,
   PlatformFontsWidget,
+  PlaywrightLocatorView,
   PropertiesWidget,
   PropertyRenderer,
   StyleEditorWidget,

@@ -7,6 +7,7 @@ import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as UI from '../../ui/legacy/legacy.js';
+import {LocatorPickerService} from '../../ui/legacy/components/utils/LocatorPickerService.js';
 
 import {ScreencastView} from './ScreencastView.js';
 
@@ -28,11 +29,59 @@ export class ScreencastApp implements Common.App.App,
   private screenCaptureModel?: SDK.ScreenCaptureModel.ScreenCaptureModel;
   private screencastView?: ScreencastView;
   rootView?: UI.RootView.RootView;
+  private showRightPanel: boolean = true;
+
   constructor() {
     this.enabledSetting = Common.Settings.Settings.instance().createSetting('screencast-enabled', true);
     this.toggleButton = new UI.Toolbar.ToolbarToggle(i18nString(UIStrings.toggleScreencast), 'devices');
     this.toggleButton.setToggled(this.enabledSetting.get());
     this.toggleButton.setEnabled(false);
+
+    // Check URL parameter for panel visibility
+    const urlParams = new URLSearchParams(window.location.search);
+    const shouldHidePanel = urlParams.get('showPanel') !== 'true';
+
+    // Initially show panel for proper initialization
+    this.showRightPanel = true;
+
+    // If shouldHidePanel, hide after initialization delay
+    if (shouldHidePanel) {
+      setTimeout(() => {
+        this.showRightPanel = false;
+        this.updatePanelVisibility();
+      }, 100);
+    }
+
+    // Listen for messages from parent frame
+    window.addEventListener('message', (event) => {
+      // Filter out noise from React DevTools and other extensions
+      if (!event.data || typeof event.data !== 'object') {
+        return;
+      }
+
+      if (event.data.source && event.data.source.includes('react-devtools')) {
+        return;
+      }
+
+      // Handle locator picker messages globally
+      if (event.data.type === 'startPickLocator') {
+        const service = LocatorPickerService.instance();
+        if (service.isInPickMode()) {
+          // Cancel existing pick mode before starting a new one
+          void service.cancelPickMode().then(() => {
+            void service.startPickMode();
+          });
+        } else {
+          void service.startPickMode();
+        }
+      } else if (event.data.type === 'cancelPickLocator') {
+        // User cancelled from parent frame, call stopPickMode without sending cancellation message to parent frame
+        void LocatorPickerService.instance().stopPickMode();
+      } else if (event.data.type === 'togglePanel') {
+        this.showRightPanel = event.data.show !== false;
+        this.updatePanelVisibility();
+      }
+    });
     this.toggleButton.addEventListener(UI.Toolbar.ToolbarButton.Events.CLICK, this.toggleButtonClicked, this);
     SDK.TargetManager.TargetManager.instance().observeModels(SDK.ScreenCaptureModel.ScreenCaptureModel, this);
   }
@@ -54,8 +103,14 @@ export class ScreencastApp implements Common.App.App,
     this.rootSplitWidget.show(this.rootView.element);
     this.rootSplitWidget.hideMain();
 
-    this.rootSplitWidget.setSidebarWidget(UI.InspectorView.InspectorView.instance());
-    UI.InspectorView.InspectorView.instance().setOwnerSplit(this.rootSplitWidget);
+    // Only show sidebar if panel is enabled
+    if (this.showRightPanel) {
+      this.rootSplitWidget.setSidebarWidget(UI.InspectorView.InspectorView.instance());
+      UI.InspectorView.InspectorView.instance().setOwnerSplit(this.rootSplitWidget);
+    } else {
+      this.rootSplitWidget.hideSidebar();
+    }
+
     this.rootView.attachToDocument(document);
     this.rootView.focus();
   }
@@ -93,6 +148,27 @@ export class ScreencastApp implements Common.App.App,
     this.onScreencastEnabledChanged();
   }
 
+  private updatePanelVisibility(): void {
+    if (!this.rootSplitWidget) {
+      return;
+    }
+
+    if (this.showRightPanel) {
+      // Show the sidebar panel
+      if (!this.rootSplitWidget.sidebarWidget()) {
+        this.rootSplitWidget.setSidebarWidget(UI.InspectorView.InspectorView.instance());
+        UI.InspectorView.InspectorView.instance().setOwnerSplit(this.rootSplitWidget);
+      }
+      // Show both main and sidebar
+      if (this.screencastView) {
+        this.rootSplitWidget.showBoth();
+      }
+    } else {
+      // Hide the sidebar panel
+      this.rootSplitWidget.hideSidebar();
+    }
+  }
+
   private onScreencastEnabledChanged(): void {
     if (!this.rootSplitWidget) {
       return;
@@ -104,6 +180,9 @@ export class ScreencastApp implements Common.App.App,
     } else {
       this.rootSplitWidget.hideMain();
     }
+
+    // Update panel visibility based on current setting
+    this.updatePanelVisibility();
   }
 }
 

@@ -59,6 +59,7 @@ import {ElementsTreeOutline} from './ElementsTreeOutline.js';
 import {LayoutPane} from './LayoutPane.js';
 import type {MarkerDecorator} from './MarkerDecorator.js';
 import {MetricsSidebarPane} from './MetricsSidebarPane.js';
+import {PlaywrightLocatorView} from './PlaywrightLocatorView.js';
 import {
   Events as StylesSidebarPaneEvents,
   StylesSidebarPane,
@@ -110,6 +111,11 @@ const UIStrings = {
    * HTML element.
    */
   styles: 'Styles',
+  /**
+   * @description Title of a pane in the Elements panel that shows Playwright locators for the selected
+   * HTML element.
+   */
+  playwrightLocator: 'Locator',
   /**
    * @description A context menu item to reveal a node in the DOM tree of the Elements Panel
    */
@@ -164,6 +170,7 @@ const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 export const enum SidebarPaneTabId {
   COMPUTED = 'computed',
   STYLES = 'styles',
+  PLAYWRIGHT = 'playwright',
 }
 
 const createAccessibilityTreeToggleButton = (isActive: boolean): HTMLElement => {
@@ -200,6 +207,7 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
   stylesWidget: StylesSidebarPane;
   private readonly computedStyleWidget: ComputedStyleWidget;
   private readonly metricsWidget: MetricsSidebarPane;
+  private readonly playwrightLocatorView: PlaywrightLocatorView;
   private treeOutlines = new Set<ElementsTreeOutline>();
   private searchResults!: Array<{
     domModel: SDK.DOMModel.DOMModel,
@@ -287,6 +295,7 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
     this.stylesWidget = new StylesSidebarPane(computedStyleModel);
     this.computedStyleWidget = new ComputedStyleWidget(computedStyleModel);
     this.metricsWidget = new MetricsSidebarPane(computedStyleModel);
+    this.playwrightLocatorView = new PlaywrightLocatorView();
 
     Common.Settings.Settings.instance()
         .moduleSetting('sidebar-position')
@@ -1105,6 +1114,14 @@ export class ElementsPanel extends UI.Panel.Panel implements UI.SearchableView.S
 
     tabbedPane.addEventListener(UI.TabbedPane.Events.TabSelected, tabSelected, this);
     this.sidebarPaneView.appendView(computedView);
+
+    // Add Playwright Locator view
+    const playwrightView = new UI.View.SimpleView(
+        i18nString(UIStrings.playwrightLocator), /* useShadowDom */ undefined, SidebarPaneTabId.PLAYWRIGHT as Lowercase<string>);
+    playwrightView.element.classList.add('composite', 'fill');
+    this.playwrightLocatorView.show(playwrightView.element);
+    this.sidebarPaneView.appendView(playwrightView);
+
     this.stylesViewToReveal = stylesView;
 
     this.sidebarPaneView.appendApplicableItems('elements-sidebar');

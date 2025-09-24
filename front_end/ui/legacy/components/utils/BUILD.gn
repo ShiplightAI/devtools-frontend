@@ -20,6 +20,7 @@ devtools_module("utils") {
     "ImagePreview.ts",
     "JSPresentationUtils.ts",
     "Linkifier.ts",
+    "LocatorPickerService.ts",
     "Reload.ts",
     "TargetDetachedDialog.ts",
   ]

@@ -638,7 +638,7 @@ export class ScreencastView extends UI.Widget.VBox implements SDK.OverlayModel.H
   }
 
   private viewportDimensions(): {width: number, height: number} {
-    const gutterSize = 30;
+    const gutterSize = 0; // 30;
     const bordersSize = BORDERS_SIZE;
     const width = this.element.offsetWidth - bordersSize - gutterSize;
     const height = this.element.offsetHeight - bordersSize - gutterSize - NAVBAR_HEIGHT;
@@ -811,7 +811,7 @@ export class ScreencastView extends UI.Widget.VBox implements SDK.OverlayModel.H
   }
 }
 
-export const BORDERS_SIZE = 44;
+export const BORDERS_SIZE = 0; // 44;
 export const NAVBAR_HEIGHT = 29;
 export const HTTP_REGEX = /^http:\/\/(.+)/;
 export const SCHEME_REGEX = /^(https?|about|chrome):/;
