@@ -88,14 +88,15 @@ jobs:
             },
           ]
           GCLIENT
-          gclient sync --no-history --nohooks
-          gclient runhooks
+          gclient sync --no-history
 
+      # docs/get_the_code.md: `gclient sync` then `npm run build`. The build
+      # creates and initialises out/Default itself (package.json's prebuild runs
+      # `gn gen`), so there is no separate gn step. Bundling and type-checking
+      # stay on — the bundled output is what gets served.
       - name: Build
         working-directory: devtools-frontend
-        run: |
-          gn gen out/Default
-          npm run build
+        run: npm run build
 
       - name: Stage the build output as the package's dist/
         working-directory: devtools-frontend
