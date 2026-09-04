@@ -1,0 +1,175 @@
+# Build this repository and publish the result as @shiplightai/devtools-assets.
+#
+# Why the build runs here: the CLI needs DevTools as built, servable files.
+# Upstream's own npm package ships TypeScript source, so there is nothing to
+# consume directly. Building in the job means no repository ever commits the
+# ~120 MB of output — it exists only for the life of this run.
+#
+# Publishing uses npm trusted publishing: the job exchanges its GitHub Actions
+# OIDC id-token for a short-lived registry token. That needs BOTH
+# `id-token: write` below AND a trusted publisher configured on npm for
+# ShiplightAI/devtools-frontend + this workflow filename. Trusted publishers are
+# scoped to a repository, so moving this workflow here from the old monorepo
+# invalidates the previous configuration — re-point it before the first publish.
+#
+# Version policy — deliberately unlike the CLI and MCP release workflows, which
+# auto-bump the live npm patch version. These assets stay pinned across many
+# shiplightai releases so npm's content-addressed cache can reuse the unchanged
+# tarball. This publishes whatever version shiplight/devtools-assets/package.json
+# already carries; bump it by hand, in a PR, when you publish a new build.
+name: Publish devtools-assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every gate but skip the npm publish (tests the workflow itself)'
+        type: boolean
+        default: false
+      max_size_increase_pct:
+        description: 'Maximum approved growth vs the live version; a genuinely newer DevTools snapshot may need this raised'
+        type: string
+        default: '5'
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing: OIDC id-token -> short-lived registry token
+
+    steps:
+      # Checked out into a named subdirectory so a gclient solution can sit
+      # beside it at the workspace root, which is how gclient expects a
+      # standalone checkout to be laid out.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: devtools-frontend
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Catches the commonest misconfiguration — a job without `id-token: write`
+      # — before spending an hour on a Chromium build.
+      - name: Assert the OIDC id-token is available to this job
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            printf '::%s::%s\n' error "No OIDC id-token in this job — trusted publishing needs 'permissions: id-token: write'"
+            exit 1
+          fi
+          echo "OIDC id-token endpoint present."
+
+      - name: Install depot_tools
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$RUNNER_TEMP/depot_tools"
+          echo "$RUNNER_TEMP/depot_tools" >> "$GITHUB_PATH"
+
+      # The cxx_debugging extension's LLVM, lldb-eval and cmake dependencies are
+      # gated on checkout_cxx_debugging_extension_deps and are by far the largest
+      # things gclient would fetch. The debugger does not use that extension.
+      - name: Sync dependencies
+        run: |
+          cat > .gclient <<'GCLIENT'
+          solutions = [
+            {
+              "name": "devtools-frontend",
+              "url": "https://github.com/ShiplightAI/devtools-frontend.git",
+              "managed": False,
+              "custom_deps": {},
+              "custom_vars": {
+                "checkout_cxx_debugging_extension_deps": False,
+              },
+            },
+          ]
+          GCLIENT
+          gclient sync --no-history --nohooks
+          gclient runhooks
+
+      - name: Build
+        working-directory: devtools-frontend
+        run: |
+          gn gen out/Default
+          npm run build
+
+      - name: Stage the build output as the package's dist/
+        working-directory: devtools-frontend
+        run: |
+          test -d out/Default/gen/front_end || {
+            printf '::%s::%s\n' error "Build produced no out/Default/gen/front_end"
+            exit 1
+          }
+          rm -rf shiplight/devtools-assets/dist
+          cp -r out/Default/gen/front_end shiplight/devtools-assets/dist
+          # The CLI resolves this package and joins "dist", then serves
+          # inspector.html from it. A layout change surfaces in the CLI as a
+          # misleading "package is not installed" error, so assert it here.
+          test -f shiplight/devtools-assets/dist/inspector.html || {
+            printf '::%s::%s\n' error "dist/inspector.html missing — the CLI serves this file; check the build output layout"
+            exit 1
+          }
+          echo "staged $(find shiplight/devtools-assets/dist -type f | wc -l) files"
+
+      - name: Assert the package declares no dependencies
+        working-directory: devtools-frontend/shiplight/devtools-assets
+        run: |
+          node -e '
+            const p = require("./package.json");
+            for (const field of ["dependencies", "peerDependencies", "optionalDependencies"]) {
+              if (p[field] && Object.keys(p[field]).length) {
+                console.error(`::error::package.json declares ${field}; this package must stay dependency-free`);
+                process.exit(1);
+              }
+            }
+            console.log("no dependencies declared.");
+          '
+
+      # Unpacked against unpacked: npm reports dist.unpackedSize for the live
+      # version, and comparing that to a packed tarball would compare
+      # compressed bytes with uncompressed ones and report nonsense.
+      - name: Compare size against the live version
+        working-directory: devtools-frontend
+        run: |
+          NEW=$(du -sb shiplight/devtools-assets/dist | cut -f1)
+          LIVE=$(npm view @shiplightai/devtools-assets dist.unpackedSize 2>/dev/null || echo 0)
+          if [ "$LIVE" = "0" ] || [ -z "$LIVE" ]; then
+            echo "No live version to compare against; skipping the size gate. new=${NEW} bytes"
+            exit 0
+          fi
+          PCT=$(node -e "console.log(Math.round((($NEW - $LIVE) / $LIVE) * 100))")
+          echo "unpacked live=${LIVE} new=${NEW} delta=${PCT}%"
+          if [ "$PCT" -gt "${{ inputs.max_size_increase_pct }}" ]; then
+            printf '::%s::%s\n' error "Unpacked size grew ${PCT}% (limit ${{ inputs.max_size_increase_pct }}%). Raise max_size_increase_pct if a newer DevTools snapshot explains it."
+            exit 1
+          fi
+
+      - name: Pack
+        working-directory: devtools-frontend/shiplight/devtools-assets
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          TARBALL=$(ls "$RUNNER_TEMP"/shiplightai-devtools-assets-*.tgz)
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+          echo "Packed $(du -h "$TARBALL" | cut -f1)"
+
+      # `npm publish <tarball>` rather than `pnpm publish`: this package declares
+      # no dependencies (asserted above), so there is no workspace: protocol for
+      # npm to mishandle, and npm uploads bytes that were already packed.
+      #
+      # --provenance is safe now that this repository is public. It fails on a
+      # private repository, which is why the previous incarnation of this
+      # workflow omitted it.
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        run: npm publish "$TARBALL" --provenance --access public
+
+      # No --provenance here on purpose: provenance requires a public
+      # repository, and a dry run must stay usable while this one is not. The
+      # real publish above keeps it.
+      - name: Dry run — publish skipped
+        if: ${{ inputs.dry_run }}
+        run: npm publish "$TARBALL" --access public --dry-run

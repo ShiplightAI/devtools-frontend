@@ -1,0 +1,30 @@
+{
+  "name": "@shiplightai/devtools-assets",
+  "version": "1.0.1",
+  "description": "Chrome DevTools frontend assets, built from this repository, used by shiplightai's local debugger live view. Static-only — no JS entry point. Bump this version by hand when publishing a new build, so npm's content-addressed cache can reuse the unchanged tarball across shiplightai upgrades.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ShiplightAI/devtools-frontend.git",
+    "directory": "shiplight/devtools-assets"
+  },
+  "homepage": "https://github.com/ShiplightAI/devtools-frontend#readme",
+  "bugs": {
+    "url": "https://github.com/ShiplightAI/devtools-frontend/issues"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "author": "Shiplight",
+  "license": "BSD-3-Clause AND Apache-2.0"
+}
