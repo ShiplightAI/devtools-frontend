@@ -52,8 +52,35 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      # npm's OIDC token exchange landed in 11.5.1, and Node 22 bundles 10.9.x —
+      # a CLI that has no idea OIDC exists, looks for a registry token this job
+      # deliberately does not have, and dies with ENEEDAUTH. Node 24 bundles
+      # 11.19.x, so the version below normally does nothing; it only upgrades if
+      # the floating `node-version: '24'` ever resolves to an older image.
+      #
+      # This npm serves the pack and publish steps alone. The build runs the
+      # vendored node in third_party/node, so it is unaffected either way.
+      #
+      # Matches monots' publish workflows, which publish the CLI, the SDK, the
+      # MCP server and the 1.0.0 of this very package the same way.
+      - name: Ensure npm supports trusted publishing (>= 11.5.1)
+        run: |
+          set -euo pipefail
+          CURRENT=$(npm --version)
+          echo "npm $CURRENT on node $(node --version)"
+          if ! node -e "
+            const [have, need] = [process.argv[1], '11.5.1'].map((v) => v.split('.').map(Number));
+            const ok = have[0] > need[0]
+              || (have[0] === need[0] && (have[1] > need[1] || (have[1] === need[1] && have[2] >= need[2])));
+            process.exit(ok ? 0 : 1);
+          " "$CURRENT"; then
+            echo "npm $CURRENT predates trusted publishing — upgrading"
+            npm install -g npm@latest
+            npm --version
+          fi
 
       # Catches the commonest misconfiguration — a job without `id-token: write`
       # — before spending an hour on a Chromium build.
@@ -173,20 +200,27 @@ jobs:
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
           echo "Packed $(du -h "$TARBALL" | cut -f1)"
 
-      # `npm publish <tarball>` rather than `pnpm publish`: this package declares
-      # no dependencies (asserted above), so there is no workspace: protocol for
-      # npm to mishandle, and npm uploads bytes that were already packed.
+      # Runs on every dispatch, a real publish included: --dry-run performs npm's
+      # OIDC token exchange, so a trusted publisher that names the wrong
+      # repository or workflow file fails HERE, before anything is uploaded,
+      # rather than as a bare ENEEDAUTH from the step below.
       #
-      # --provenance is safe now that this repository is public. It fails on a
-      # private repository, which is why the previous incarnation of this
-      # workflow omitted it.
+      # Verbose because that is the only level at which npm says anything: on
+      # success the log carries `oidc Successfully retrieved and set token`, and
+      # on failure it names why the exchange was rejected. Quieter levels
+      # swallow both.
+      - name: npm publish --dry-run (exercises the OIDC token exchange)
+        run: npm publish "$TARBALL" --access public --dry-run --loglevel verbose
+
+      # `npm publish <tarball>` rather than `pnpm publish`: pnpm 10 has no OIDC
+      # support at all. That is safe here because the package declares no
+      # dependencies — asserted above — so there is no workspace: protocol for
+      # npm to mishandle, and it uploads bytes that were already packed.
+      #
+      # No --provenance flag: under trusted publishing npm attaches provenance
+      # by itself whenever the OIDC claim reports the repository as public, and
+      # passing the flag explicitly would only turn a future return to private
+      # into a failed publish.
       - name: Publish
         if: ${{ !inputs.dry_run }}
-        run: npm publish "$TARBALL" --provenance --access public
-
-      # No --provenance here on purpose: provenance requires a public
-      # repository, and a dry run must stay usable while this one is not. The
-      # real publish above keeps it.
-      - name: Dry run — publish skipped
-        if: ${{ inputs.dry_run }}
-        run: npm publish "$TARBALL" --access public --dry-run
+        run: npm publish "$TARBALL" --access public
