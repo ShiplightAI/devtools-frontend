@@ -34,6 +34,13 @@ So the build output must land at `dist/` in the published tarball. If it lands
 anywhere else the CLI reports "Required peer package … is not installed", which
 is a misleading error for a layout mismatch.
 
+`dist/` is not a straight copy of `out/Default/gen/front_end`. That is a build
+directory, and about two thirds of it — sourcemaps, `.d.ts` and `.prebundle.*`
+intermediates, and `fixtures/` test traces — is byproduct the browser never
+requests. The workflow deletes those before packing, which is what keeps the
+package near 120 MB instead of 378 MB. Removing that filter would push the
+tarball past the size gate.
+
 ## Publishing
 
 Run the **Publish devtools-assets** workflow (`workflow_dispatch`). It builds

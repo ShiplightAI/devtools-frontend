@@ -107,6 +107,22 @@ jobs:
           }
           rm -rf shiplight/devtools-assets/dist
           cp -r out/Default/gen/front_end shiplight/devtools-assets/dist
+          # gen/front_end is a build directory, not a distribution. Roughly two
+          # thirds of it is byproduct the browser never requests: sourcemaps and
+          # the .d.ts and .prebundle.js/.ts intermediates the bundler consumed,
+          # plus fixtures/ — timeline and application test traces, 159 MB of
+          # .json.gz on their own. Shipping the lot makes a 378 MB package where
+          # the hand-built 1.0.0 was 120 MB, and trips the size gate below.
+          #
+          # Deleting them reproduces what 1.0.0 actually contained: 4,109 files,
+          # none of them a map, a .ts or a fixture. The .js keep their
+          # sourceMappingURL comments, as 1.0.0's did — the maps 404 only for
+          # someone debugging DevTools itself in DevTools.
+          find shiplight/devtools-assets/dist -name '*.map' -delete
+          find shiplight/devtools-assets/dist -name '*.ts' -delete
+          find shiplight/devtools-assets/dist -name '*.test.js' -delete
+          find shiplight/devtools-assets/dist -name '*.prebundle.js' -delete
+          rm -rf shiplight/devtools-assets/dist/panels/*/fixtures
           # The CLI resolves this package and joins "dist", then serves
           # inspector.html from it. A layout change surfaces in the CLI as a
           # misleading "package is not installed" error, so assert it here.
