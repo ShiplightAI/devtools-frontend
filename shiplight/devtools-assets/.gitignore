@@ -1,0 +1,4 @@
+# Build output. Produced by the publish workflow from this repository's own
+# sources and packed straight into the npm tarball — never committed. Committing
+# it is what this packaging layout exists to avoid.
+dist/
